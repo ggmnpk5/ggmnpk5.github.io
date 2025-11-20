@@ -1,1095 +1,514 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { 
-  Calendar, 
-  Clock, 
-  MapPin, 
-  Plus, 
-  Trash2, 
-  Languages, 
-  Coins, 
-  Sparkles, 
-  ChevronRight, 
-  Plane,
-  Utensils,
-  Beer,
-  Camera,
-  Hotel,
-  X,
-  Save,
-  RefreshCw,
-  Loader2,
-  MessageCircle,
-  Send,
-  Bot,
-  RotateCcw,
-  ShoppingBag,
-  Users,
-  CheckSquare,
-  Check,
-  Square,
-  Filter,
-  AlertTriangle
-} from 'lucide-react';
-import { initializeApp } from 'firebase/app';
-import { 
-  getAuth, 
-  signInAnonymously, 
-  onAuthStateChanged,
-  signInWithCustomToken
-} from 'firebase/auth';
-import { 
-  getFirestore, 
-  collection, 
-  addDoc, 
-  deleteDoc, 
-  updateDoc,
-  doc, 
-  onSnapshot,
-  serverTimestamp,
-  orderBy,
-  query
-} from 'firebase/firestore';
-
-// --- API & Firebase Configuration ---
-const apiKey = ""; // API key injected by environment
-const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
-
-// Initialize Firebase
-const firebaseConfig = JSON.parse(__firebase_config);
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db = getFirestore(app);
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-
-// --- Mock Data & Helper Functions ---
-
-const DEFAULT_EXCHANGE_RATE = 192.5; 
-
-const TRAVEL_PHRASES = [
-  { ko: "안녕하세요", cn: "你好", pinyin: "Nǐ hǎo", pronunciation: "니하오" },
-  { ko: "감사합니다", cn: "谢谢", pinyin: "Xièxiè", pronunciation: "씨에씨에" },
-  { ko: "얼마인가요?", cn: "多少钱?", pinyin: "Duōshǎo qián?", pronunciation: "뚜어샤오 치엔?" },
-  { ko: "화장실이 어디인가요?", cn: "洗手间在哪里?", pinyin: "Xǐshǒujiān zài nǎlǐ?", pronunciation: "시쇼우지엔 짜이 나리?" },
-  { ko: "고수 빼주세요", cn: "不要香菜", pinyin: "Bù yào xiāngcài", pronunciation: "부야오 샹차이" },
-  { ko: "이거 주세요", cn: "我要这个", pinyin: "Wǒ yào zhège", pronunciation: "워야오 쩌거" },
-  { ko: "계산서 주세요", cn: "买单", pinyin: "Mǎidān", pronunciation: "마이단" },
-];
-
-// Category Configuration
-const CATEGORIES = {
-  sightseeing: { label: '관광', icon: Camera, color: 'text-purple-600 bg-purple-50 border-purple-100' },
-  food: { label: '식당/카페', icon: Utensils, color: 'text-orange-600 bg-orange-50 border-orange-100' },
-  shopping: { label: '쇼핑', icon: ShoppingBag, color: 'text-pink-600 bg-pink-50 border-pink-100' },
-  accommodation: { label: '숙소', icon: Hotel, color: 'text-indigo-600 bg-indigo-50 border-indigo-100' },
-  transport: { label: '이동', icon: Plane, color: 'text-blue-600 bg-blue-50 border-blue-100' },
-  etc: { label: '기타', icon: MapPin, color: 'text-gray-600 bg-gray-50 border-gray-100' }
-};
-
-// Checklist Categories
-const CHECKLIST_TYPES = {
-  food: { label: '먹킷리스트', icon: Utensils, color: 'bg-orange-100 text-orange-600' },
-  shopping: { label: '쇼핑리스트', icon: ShoppingBag, color: 'bg-pink-100 text-pink-600' },
-  sightseeing: { label: '관광명소', icon: Camera, color: 'bg-purple-100 text-purple-600' },
-  etc: { label: '기타/준비물', icon: CheckSquare, color: 'bg-gray-100 text-gray-600' }
-};
-
-// --- Components ---
-
-const Navigation = ({ activeTab, setActiveTab }) => (
-  <div className="fixed bottom-0 left-0 w-full bg-white border-t border-gray-200 flex justify-around py-3 pb-6 z-50 shadow-lg text-xs font-medium">
-    <button 
-      onClick={() => setActiveTab('timeline')}
-      className={`flex flex-col items-center space-y-1 ${activeTab === 'timeline' ? 'text-teal-600' : 'text-gray-400'}`}
-    >
-      <Calendar size={22} />
-      <span>일정</span>
-    </button>
-    <button 
-      onClick={() => setActiveTab('checklist')}
-      className={`flex flex-col items-center space-y-1 ${activeTab === 'checklist' ? 'text-teal-600' : 'text-gray-400'}`}
-    >
-      <CheckSquare size={22} />
-      <span>체크리스트</span>
-    </button>
-    <button 
-      onClick={() => setActiveTab('translate')}
-      className={`flex flex-col items-center space-y-1 ${activeTab === 'translate' ? 'text-teal-600' : 'text-gray-400'}`}
-    >
-      <Languages size={22} />
-      <span>통역</span>
-    </button>
-    <button 
-      onClick={() => setActiveTab('currency')}
-      className={`flex flex-col items-center space-y-1 ${activeTab === 'currency' ? 'text-teal-600' : 'text-gray-400'}`}
-    >
-      <Coins size={22} />
-      <span>환율</span>
-    </button>
-  </div>
-);
-
-const TimelineItem = ({ item, onDelete }) => {
-  const categoryConfig = CATEGORIES[item.category] || CATEGORIES.etc;
-  const CategoryIcon = categoryConfig.icon;
-
-  return (
-    <div className="mb-6 ml-4 relative border-l-2 border-teal-200 pl-6 pb-2 last:border-l-0 last:mb-0 animate-fade-in">
-      <div className="absolute -left-[9px] top-0 w-4 h-4 rounded-full bg-teal-500 border-4 border-white shadow-sm"></div>
-      
-      <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 hover:shadow-md transition-shadow">
-        <div className="flex justify-between items-start mb-2">
-          <div className="flex items-center space-x-2">
-            <div className="flex items-center text-teal-700 font-bold text-lg">
-              <Clock size={16} className="mr-1" />
-              <span>{item.time}</span>
-            </div>
-            {/* Category Badge */}
-            <div className={`flex items-center px-2 py-1 rounded-md border text-xs font-bold ${categoryConfig.color}`}>
-              <CategoryIcon size={12} className="mr-1" />
-              {categoryConfig.label}
-            </div>
-          </div>
-          <button onClick={() => onDelete(item.id)} className="text-gray-300 hover:text-red-500 transition-colors">
-            <Trash2 size={16} />
-          </button>
-        </div>
-        
-        <h3 className="text-xl font-bold text-gray-800 mb-1">{item.title}</h3>
-        
-        <div className="flex items-center text-gray-500 text-sm">
-          <MapPin size={14} className="mr-1" />
-          {item.location}
-        </div>
-
-        {item.note && (
-          <div className="text-gray-600 text-sm mt-3 bg-gray-50 p-2 rounded">
-            {item.note}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-};
-
-// --- Confirm Modal Component ---
-const ConfirmModal = ({ isOpen, onClose, onConfirm, message }) => {
-  if (!isOpen) return null;
-
-  return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black bg-opacity-50 animate-fade-in">
-      <div className="bg-white rounded-2xl p-6 w-80 shadow-2xl transform scale-100 transition-all">
-        <div className="flex items-center justify-center mb-4 text-red-500">
-          <AlertTriangle size={40} />
-        </div>
-        <h3 className="text-lg font-bold text-gray-800 text-center mb-2">삭제 하시겠습니까?</h3>
-        <p className="text-gray-600 text-sm text-center mb-6">{message}</p>
-        <div className="flex space-x-3">
-          <button 
-            onClick={onClose} 
-            className="flex-1 py-3 bg-gray-100 text-gray-700 rounded-xl font-bold hover:bg-gray-200 transition-colors"
-          >
-            취소
-          </button>
-          <button 
-            onClick={onConfirm} 
-            className="flex-1 py-3 bg-red-500 text-white rounded-xl font-bold hover:bg-red-600 transition-colors"
-          >
-            삭제
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-// --- Chat Component ---
-const AIChatModal = ({ isOpen, onClose }) => {
-  const initialMessage = { role: 'model', text: "안녕하세요! 연태-칭다오 여행 가이드입니다. 맛집, 교통, 일정 등 궁금한 점을 물어보세요! 🇨🇳" };
-  const [messages, setMessages] = useState([initialMessage]);
-  const [input, setInput] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const messagesEndRef = useRef(null);
-
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  };
-
-  useEffect(() => {
-    if (isOpen) scrollToBottom();
-  }, [messages, isOpen]);
-
-  const handleReset = () => {
-    setMessages([initialMessage]);
-  };
-
-  const handleSend = async () => {
-    if (!input.trim()) return;
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>연태-칭다오 여행 플래너</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     
-    const userMessage = { role: 'user', text: input };
-    setMessages(prev => [...prev, userMessage]);
-    setInput('');
-    setIsLoading(true);
-
-    try {
-      const prompt = `You are a friendly and knowledgeable travel guide for Yantai and Qingdao, China. 
-      The user is currently on a 5-night, 6-day trip.
-      Answer the user's question in Korean. Keep it concise and helpful.
-      User Question: ${input}`;
-
-      const response = await fetch(API_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }]
-        })
-      });
-
-      const data = await response.json();
-      const aiText = data.candidates?.[0]?.content?.parts?.[0]?.text || "죄송합니다. 답변을 불러올 수 없습니다.";
-
-      setMessages(prev => [...prev, { role: 'model', text: aiText }]);
-    } catch (error) {
-      console.error(error);
-      setMessages(prev => [...prev, { role: 'model', text: "네트워크 오류가 발생했습니다. 다시 시도해주세요." }]);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  if (!isOpen) return null;
-
-  return (
-    <div className="fixed inset-0 z-[60] flex flex-col bg-white animate-slide-up">
-      {/* Header */}
-      <div className="bg-teal-600 text-white p-4 flex justify-between items-center shadow-md">
-        <div className="flex items-center">
-          <Bot className="mr-2" size={24} />
-          <div>
-            <h2 className="font-bold text-lg">AI 여행 가이드</h2>
-            <p className="text-xs text-teal-100">무엇이든 물어보세요</p>
-          </div>
-        </div>
-        <div className="flex items-center space-x-1">
-          <button 
-            onClick={handleReset} 
-            className="p-2 hover:bg-teal-700 rounded-full transition-colors"
-            title="대화 초기화"
-          >
-            <RotateCcw size={20} />
-          </button>
-          <button onClick={onClose} className="p-2 hover:bg-teal-700 rounded-full transition-colors">
-            <X size={24} />
-          </button>
-        </div>
-      </div>
-
-      {/* Messages Area */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50">
-        {messages.map((msg, idx) => (
-          <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-            <div 
-              className={`max-w-[80%] p-3 rounded-2xl text-sm shadow-sm ${
-                msg.role === 'user' 
-                  ? 'bg-teal-600 text-white rounded-tr-none' 
-                  : 'bg-white text-gray-800 border border-gray-200 rounded-tl-none'
-              }`}
-            >
-              {msg.text}
-            </div>
-          </div>
-        ))}
-        {isLoading && (
-          <div className="flex justify-start">
-            <div className="bg-white p-3 rounded-2xl rounded-tl-none border border-gray-200 shadow-sm flex items-center space-x-2">
-              <Loader2 size={16} className="animate-spin text-teal-600" />
-              <span className="text-xs text-gray-500">답변 작성 중...</span>
-            </div>
-          </div>
-        )}
-        <div ref={messagesEndRef} />
-      </div>
-
-      {/* Input Area */}
-      <div className="p-4 bg-white border-t border-gray-200 pb-8">
-        <div className="flex items-center space-x-2">
-          <input 
-            type="text" 
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyPress={(e) => e.key === 'Enter' && handleSend()}
-            placeholder="예: 칭다오 맛집 추천해줘"
-            className="flex-1 p-3 bg-gray-100 rounded-full focus:outline-none focus:ring-2 focus:ring-teal-500 text-sm"
-          />
-          <button 
-            onClick={handleSend}
-            disabled={isLoading || !input.trim()}
-            className="p-3 bg-teal-600 text-white rounded-full hover:bg-teal-700 disabled:bg-gray-300 transition-colors shadow-md"
-          >
-            <Send size={20} />
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-const AddItemModal = ({ isOpen, onClose, onAdd, selectedDay }) => {
-  const [title, setTitle] = useState('');
-  const [time, setTime] = useState('');
-  const [location, setLocation] = useState('');
-  const [note, setNote] = useState('');
-  const [category, setCategory] = useState('sightseeing');
-  const [isSubmitting, setIsSubmitting] = useState(false);
-
-  if (!isOpen) return null;
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    if (!title || !time || isSubmitting) return;
-    
-    setIsSubmitting(true);
-    await onAdd({ day: selectedDay, time, title, location, note, category });
-    setIsSubmitting(false);
-    
-    // Reset
-    setTitle(''); setTime(''); setLocation(''); setNote(''); setCategory('sightseeing');
-    onClose();
-  };
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black bg-opacity-50">
-      {/* Modal Layout Fixed: Added max-height handling and pb-20 for scrolling */}
-      <div className="bg-white w-full sm:max-w-sm rounded-t-2xl sm:rounded-2xl shadow-2xl animate-slide-up flex flex-col max-h-[90vh]">
-        
-        {/* Header - Fixed */}
-        <div className="p-6 pb-2 flex justify-between items-center border-b border-gray-100">
-          <h2 className="text-xl font-bold text-gray-800">{selectedDay}일차 일정 추가</h2>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
-            <X size={24} />
-          </button>
-        </div>
-
-        {/* Content - Scrollable */}
-        <div className="overflow-y-auto p-6 pt-4 pb-24">
-          <form onSubmit={handleSubmit} className="space-y-4">
-            {/* Category Selection */}
-            <div>
-              <label className="block text-sm font-medium text-gray-600 mb-2">종류 (Category)</label>
-              <div className="grid grid-cols-3 gap-2">
-                {Object.entries(CATEGORIES).map(([key, config]) => {
-                  const Icon = config.icon;
-                  const isSelected = category === key;
-                  return (
-                    <button
-                      key={key}
-                      type="button"
-                      onClick={() => setCategory(key)}
-                      className={`flex flex-col items-center justify-center p-2 rounded-xl border transition-all ${
-                        isSelected 
-                          ? 'bg-teal-50 border-teal-500 text-teal-700 ring-1 ring-teal-500' 
-                          : 'bg-white border-gray-200 text-gray-500 hover:bg-gray-50'
-                      }`}
-                    >
-                      <Icon size={20} className="mb-1" />
-                      <span className="text-xs font-medium">{config.label}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-600 mb-1">시간</label>
-              <input 
-                type="time" 
-                value={time} 
-                onChange={(e) => setTime(e.target.value)}
-                className="w-full p-3 bg-gray-50 rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-teal-500"
-                required 
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-600 mb-1">장소/활동명</label>
-              <input 
-                type="text" 
-                value={title} 
-                onChange={(e) => setTitle(e.target.value)}
-                placeholder="예: 칭다오 맥주 박물관"
-                className="w-full p-3 bg-gray-50 rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-teal-500"
-                required 
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-600 mb-1">위치</label>
-              <input 
-                type="text" 
-                value={location} 
-                onChange={(e) => setLocation(e.target.value)}
-                placeholder="예: 덩저우로 56번지"
-                className="w-full p-3 bg-gray-50 rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-teal-500"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-600 mb-1">메모</label>
-              <textarea 
-                value={note} 
-                onChange={(e) => setNote(e.target.value)}
-                placeholder="예약 번호, 준비물 등"
-                className="w-full p-3 bg-gray-50 rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-teal-500 h-24 resize-none"
-              />
-            </div>
-
-            <button 
-              type="submit" 
-              disabled={isSubmitting}
-              className="w-full bg-teal-600 text-white py-3 rounded-xl font-bold hover:bg-teal-700 transition-colors flex items-center justify-center disabled:bg-gray-400"
-            >
-              {isSubmitting ? <Loader2 className="animate-spin mr-2" size={18}/> : <Plus size={18} className="mr-2" />}
-              일정 추가하기
-            </button>
-            <p className="text-xs text-center text-gray-400 mt-2">
-              일정은 함께 보는 모든 사람에게 실시간 공유됩니다.
-            </p>
-          </form>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-// --- Main App Component ---
-
-export default function TripPlannerApp() {
-  const [activeTab, setActiveTab] = useState('timeline');
-  const [activeDay, setActiveDay] = useState(1);
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [isChatOpen, setIsChatOpen] = useState(false);
-  const [user, setUser] = useState(null);
-  
-  // Delete Modal State
-  const [deleteState, setDeleteState] = useState({ isOpen: false, type: null, id: null });
-  
-  // State for Currency
-  const [exchangeRate, setExchangeRate] = useState(DEFAULT_EXCHANGE_RATE);
-  const [cnyAmount, setCnyAmount] = useState('');
-  const [krwAmount, setKrwAmount] = useState('');
-
-  // State for Timeline Data
-  const [itinerary, setItinerary] = useState([]);
-  const [isLoadingData, setIsLoadingData] = useState(true);
-
-  // State for Checklist Data
-  const [checklistItems, setChecklistItems] = useState([]);
-  const [checklistInput, setChecklistInput] = useState('');
-  const [checklistCategory, setChecklistCategory] = useState('food');
-  const [checklistFilter, setChecklistFilter] = useState('all');
-
-  // State for Translation
-  const [transInput, setTransInput] = useState('');
-  const [transResult, setTransResult] = useState({ cn: '', pinyin: '' });
-  const [isTranslating, setIsTranslating] = useState(false);
-
-  // --- Firebase Auth & Data Sync ---
-  useEffect(() => {
-    const initAuth = async () => {
-      if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-        await signInWithCustomToken(auth, __initial_auth_token);
-      } else {
-        await signInAnonymously(auth);
+    <script type="importmap">
+    {
+      "imports": {
+        "lucide-react": "https://esm.sh/lucide-react@0.263.1?external=react",
+        "firebase/app": "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js",
+        "firebase/auth": "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js",
+        "firebase/firestore": "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js"
       }
-    };
-    initAuth();
-    
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
-      setUser(currentUser);
-    });
-    return () => unsubscribe();
-  }, []);
-
-  // Real-time Data Sync using Firestore
-  useEffect(() => {
-    if (!user) return;
-
-    // 1. Sync Itinerary
-    const qItinerary = collection(db, 'artifacts', appId, 'public', 'data', 'itinerary');
-    const unsubItinerary = onSnapshot(qItinerary, (snapshot) => {
-      const loadedItems = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
-      setItinerary(loadedItems);
-      setIsLoadingData(false);
-    }, (error) => console.error("Sync Error:", error));
-
-    // 2. Sync Checklist
-    const qChecklist = query(collection(db, 'artifacts', appId, 'public', 'data', 'checklist'), orderBy('createdAt', 'desc'));
-    const unsubChecklist = onSnapshot(qChecklist, (snapshot) => {
-      const items = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
-      setChecklistItems(items);
-    }, (error) => console.error("Checklist Sync Error:", error));
-
-    return () => {
-      unsubItinerary();
-      unsubChecklist();
-    };
-  }, [user]);
-
-  // --- Itinerary Handlers ---
-  const handleAddItem = async (newItem) => {
-    if (!user) return;
-    const item = {
-      ...newItem,
-      category: newItem.category || 'etc',
-      createdAt: serverTimestamp()
-    };
-    try {
-      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'itinerary'), item);
-    } catch (e) {
-      console.error("Error adding document: ", e);
     }
-  };
+    </script>
 
-  // Request Delete for Itinerary
-  const requestDeleteItem = (id) => {
-    setDeleteState({ isOpen: true, type: 'itinerary', id });
-  };
+    <style>
+        .hide-scrollbar::-webkit-scrollbar { display: none; }
+        .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        @keyframes slide-up { from { transform: translateY(100%); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+        .animate-slide-up { animation: slide-up 0.3s ease-out forwards; }
+        @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+        .animate-fade-in { animation: fade-in 0.3s ease-out forwards; }
+        @keyframes bounce-slight { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-5px); } }
+        .animate-bounce-slight { animation: bounce-slight 2s infinite ease-in-out; }
+    </style>
+</head>
+<body class="bg-gray-50">
+    <div id="root"></div>
 
-  // --- Checklist Handlers ---
-  const handleAddChecklistItem = async (e) => {
-    e.preventDefault();
-    if (!checklistInput.trim() || !user) return;
-
-    try {
-      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'checklist'), {
-        text: checklistInput,
-        category: checklistCategory,
-        isCompleted: false,
-        createdAt: serverTimestamp()
-      });
-      setChecklistInput('');
-    } catch (error) {
-      console.error("Checklist add error:", error);
-    }
-  };
-
-  const handleToggleChecklistItem = async (id, currentStatus) => {
-    if (!user) return;
-    try {
-      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'checklist', id), {
-        isCompleted: !currentStatus
-      });
-    } catch (error) {
-      console.error("Toggle error:", error);
-    }
-  };
-
-  // Request Delete for Checklist
-  const requestDeleteChecklist = (id) => {
-    setDeleteState({ isOpen: true, type: 'checklist', id });
-  };
-
-  // --- Execute Delete (Confirm Modal Action) ---
-  const executeDelete = async () => {
-    const { type, id } = deleteState;
-    if (!user || !id) return;
-
-    try {
-      const collectionName = type === 'itinerary' ? 'itinerary' : 'checklist';
-      await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', collectionName, id));
-    } catch (error) {
-      console.error("Delete error:", error);
-    } finally {
-      setDeleteState({ isOpen: false, type: null, id: null });
-    }
-  };
-
-
-  // Currency Logic
-  const handleCnyChange = (e) => {
-    const val = e.target.value;
-    setCnyAmount(val);
-    setKrwAmount((parseFloat(val || 0) * exchangeRate).toFixed(0));
-  };
-
-  const handleKrwChange = (e) => {
-    const val = e.target.value;
-    setKrwAmount(val);
-    setCnyAmount((parseFloat(val || 0) / exchangeRate).toFixed(2));
-  };
-
-  // Translation Logic
-  const handleTranslate = async () => {
-    if (!transInput) return;
-    setIsTranslating(true);
-    setTransResult({ cn: '', pinyin: '' });
-
-    try {
-      const prompt = `Translate the following Korean text to Chinese (Simplified) and provide the Pinyin pronunciation.
-      Input: "${transInput}"
-      Response Format: Return ONLY a JSON object with keys "cn" (Chinese) and "pinyin" (Romanized Pinyin). Do not use Markdown code blocks.
-      Example Output: { "cn": "你好", "pinyin": "Nǐ hǎo" }`;
-
-      const response = await fetch(API_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }]
-        })
-      });
-
-      const data = await response.json();
-      const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-      const cleanText = text.replace(/```json/g, '').replace(/```/g, '').trim();
-      const result = JSON.parse(cleanText);
-      setTransResult(result);
-    } catch (error) {
-      console.error("Translation Error:", error);
-      setTransResult({ cn: "번역 실패", pinyin: "다시 시도해주세요" });
-    } finally {
-      setIsTranslating(false);
-    }
-  };
-
-  // Filter items for current day
-  const currentDayItems = useMemo(() => {
-    return itinerary
-      .filter(item => item.day === activeDay)
-      .sort((a, b) => a.time.localeCompare(b.time));
-  }, [itinerary, activeDay]);
-
-  // Filter Checklist Items
-  const filteredChecklist = useMemo(() => {
-    if (checklistFilter === 'all') return checklistItems;
-    return checklistItems.filter(item => (item.category || 'etc') === checklistFilter);
-  }, [checklistItems, checklistFilter]);
-
-  return (
-    <div className="min-h-screen bg-gray-50 font-sans text-gray-800 pb-24">
-      {/* --- Header --- */}
-      <div className="bg-teal-600 text-white p-6 rounded-b-3xl shadow-lg relative overflow-hidden">
-        <div className="absolute top-0 right-0 opacity-10 transform translate-x-4 -translate-y-4">
-          <Plane size={120} />
-        </div>
-        <h1 className="text-2xl font-bold mb-1 flex items-center">
-          연태-칭다오 여행 <span className="text-sm font-normal ml-2 bg-teal-700 px-2 py-1 rounded-full">5박 6일</span>
-        </h1>
-        <div className="flex justify-between items-end">
-          <p className="text-teal-100 text-sm opacity-90">Yantai & Qingdao Trip Planner</p>
-          <div className="flex items-center text-xs bg-teal-800 bg-opacity-40 px-2 py-1 rounded text-teal-100">
-            <Users size={12} className="mr-1"/>
-            실시간 공유 중
-          </div>
-        </div>
-      </div>
-
-      {/* --- Body Content --- */}
-      <div className="max-w-md mx-auto p-4">
+    <script type="text/babel" data-type="module">
+        import React, { useState, useEffect, useMemo, useRef } from 'react';
+        import { 
+          Calendar, Clock, MapPin, Plus, Trash2, Languages, Coins, Sparkles, 
+          ChevronRight, Plane, Utensils, Beer, Camera, Hotel, X, Save, 
+          RefreshCw, Loader2, MessageCircle, Send, Bot, RotateCcw, ShoppingBag, 
+          Users, CheckSquare, Check, Square, Filter, AlertTriangle 
+        } from 'lucide-react';
         
-        {/* 1. Timeline View */}
-        {activeTab === 'timeline' && (
-          <>
-            {/* Day Selector */}
-            <div className="flex overflow-x-auto pb-4 mb-2 hide-scrollbar space-x-3">
-              {[1, 2, 3, 4, 5, 6].map(day => (
-                <button
-                  key={day}
-                  onClick={() => setActiveDay(day)}
-                  className={`flex-shrink-0 w-16 h-20 rounded-2xl flex flex-col items-center justify-center transition-all duration-200 border ${
-                    activeDay === day 
-                      ? 'bg-teal-600 text-white border-teal-600 shadow-md scale-105' 
-                      : 'bg-white text-gray-400 border-gray-200 hover:border-teal-300'
-                  }`}
-                >
-                  <span className="text-xs font-medium mb-1">DAY</span>
-                  <span className="text-2xl font-bold">{day}</span>
-                </button>
-              ))}
-            </div>
+        import { initializeApp } from 'firebase/app';
+        import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+        import { getFirestore, collection, addDoc, deleteDoc, updateDoc, doc, onSnapshot, serverTimestamp, orderBy, query } from 'firebase/firestore';
 
-            {/* Itinerary List */}
-            <div className="space-y-2 relative">
-              <div className="flex justify-between items-center mb-4 px-1">
-                <h2 className="text-lg font-bold text-gray-700">{activeDay}일차 일정</h2>
-                <button 
-                  onClick={() => setIsModalOpen(true)}
-                  className="flex items-center text-teal-600 text-sm font-bold bg-teal-50 px-3 py-1.5 rounded-full hover:bg-teal-100 transition-colors"
-                >
-                  <Plus size={16} className="mr-1" />
-                  추가
-                </button>
-              </div>
+        // --- 설정 영역 (자신의 키로 변경 필요) ---
+        // 주의: 실제 배포 시 API 키가 노출되지 않도록 주의하세요.
+        const apiKey = "YOUR_GEMINI_API_KEY"; 
+        const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${apiKey}`;
 
-              {isLoadingData ? (
-                 <div className="text-center py-12">
-                   <Loader2 className="animate-spin mx-auto text-teal-600" size={32} />
-                   <p className="text-gray-400 mt-2 text-sm">일정을 불러오는 중...</p>
-                 </div>
-              ) : currentDayItems.length === 0 ? (
-                <div className="text-center py-12 bg-white rounded-xl border border-dashed border-gray-300">
-                  <p className="text-gray-400 mb-2">일정이 없습니다.</p>
-                  <button 
-                    onClick={() => setIsModalOpen(true)}
-                    className="text-teal-600 font-medium text-sm underline"
-                  >
-                    첫 번째 일정을 추가해보세요
-                  </button>
-                </div>
-              ) : (
-                <div className="pl-2">
-                  {currentDayItems.map(item => (
-                    <TimelineItem key={item.id} item={item} onDelete={requestDeleteItem} />
-                  ))}
-                </div>
-              )}
+        // Firebase 설정 (본인의 Firebase 콘솔에서 가져온 설정값으로 교체해야 작동합니다)
+        const firebaseConfig = {
+            apiKey: "YOUR_FIREBASE_API_KEY",
+            authDomain: "YOUR_PROJECT.firebaseapp.com",
+            projectId: "YOUR_PROJECT_ID",
+            storageBucket: "YOUR_PROJECT.appspot.com",
+            messagingSenderId: "YOUR_SENDER_ID",
+            appId: "YOUR_APP_ID"
+        };
 
-              {/* Floating Chat Button */}
-              <button 
-                onClick={() => setIsChatOpen(true)}
-                className="fixed bottom-24 right-6 w-14 h-14 bg-indigo-600 text-white rounded-full shadow-xl flex items-center justify-center hover:bg-indigo-700 hover:scale-105 transition-all z-40 animate-bounce-slight"
-              >
-                <MessageCircle size={28} />
-              </button>
-            </div>
-          </>
-        )}
+        // 앱 초기화
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        const appId = 'travel-app-demo'; // 임의의 ID
 
-        {/* 2. Checklist View (Updated with Filter Tabs) */}
-        {activeTab === 'checklist' && (
-          <div className="space-y-6 animate-fade-in">
-            
-            {/* Input Section */}
-            <div className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100">
-              <h2 className="text-lg font-bold mb-4 text-gray-800 flex items-center">
-                <CheckSquare size={20} className="mr-2 text-teal-600" />
-                위시리스트 & 체크리스트
-              </h2>
-              
-              <form onSubmit={handleAddChecklistItem} className="space-y-3">
-                <div className="flex space-x-2 overflow-x-auto pb-2 hide-scrollbar">
-                  {Object.entries(CHECKLIST_TYPES).map(([key, config]) => (
-                    <button
-                      key={key}
-                      type="button"
-                      onClick={() => setChecklistCategory(key)}
-                      className={`flex-shrink-0 px-3 py-1.5 rounded-full text-xs font-bold flex items-center transition-colors ${
-                        checklistCategory === key
-                          ? 'bg-teal-600 text-white'
-                          : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
-                      }`}
-                    >
-                      {checklistCategory === key && <Check size={12} className="mr-1" />}
-                      {config.label}
-                    </button>
-                  ))}
-                </div>
-                
-                <div className="flex space-x-2">
-                  <input 
-                    type="text" 
-                    value={checklistInput}
-                    onChange={(e) => setChecklistInput(e.target.value)}
-                    placeholder="예: 칭다오 맥주 사기, 훠궈 먹기"
-                    className="flex-1 p-3 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-teal-500"
-                  />
-                  <button 
-                    type="submit"
-                    disabled={!checklistInput.trim()}
-                    className="bg-teal-600 text-white p-3 rounded-xl hover:bg-teal-700 disabled:bg-gray-300 transition-colors"
-                  >
-                    <Plus size={20} />
-                  </button>
-                </div>
-              </form>
-            </div>
+        // --- Mock Data & Helper Functions ---
+        const DEFAULT_EXCHANGE_RATE = 192.5; 
+        const TRAVEL_PHRASES = [
+          { ko: "안녕하세요", cn: "你好", pinyin: "Nǐ hǎo", pronunciation: "니하오" },
+          { ko: "감사합니다", cn: "谢谢", pinyin: "Xièxiè", pronunciation: "씨에씨에" },
+          { ko: "얼마인가요?", cn: "多少钱?", pinyin: "Duōshǎo qián?", pronunciation: "뚜어샤오 치엔?" },
+          { ko: "화장실이 어디인가요?", cn: "洗手间在哪里?", pinyin: "Xǐshǒujiān zài nǎlǐ?", pronunciation: "시쇼우지엔 짜이 나리?" },
+          { ko: "고수 빼주세요", cn: "不要香菜", pinyin: "Bù yào xiāngcài", pronunciation: "부야오 샹차이" },
+          { ko: "이거 주세요", cn: "我要这个", pinyin: "Wǒ yào zhège", pronunciation: "워야오 쩌거" },
+          { ko: "계산서 주세요", cn: "买单", pinyin: "Mǎidān", pronunciation: "마이단" },
+        ];
 
-            {/* Filter Tabs (New) */}
-            <div className="flex space-x-2 overflow-x-auto pb-1 hide-scrollbar">
-               <button
-                 onClick={() => setChecklistFilter('all')}
-                 className={`px-4 py-2 rounded-full text-sm font-bold transition-colors whitespace-nowrap ${
-                   checklistFilter === 'all' 
-                     ? 'bg-gray-800 text-white shadow-md' 
-                     : 'bg-white border border-gray-200 text-gray-500 hover:bg-gray-50'
-                 }`}
-               >
-                 전체 보기
-               </button>
-               {Object.entries(CHECKLIST_TYPES).map(([key, config]) => (
-                 <button
-                   key={key}
-                   onClick={() => setChecklistFilter(key)}
-                   className={`px-4 py-2 rounded-full text-sm font-bold transition-colors whitespace-nowrap flex items-center ${
-                     checklistFilter === key
-                       ? 'bg-teal-600 text-white shadow-md'
-                       : 'bg-white border border-gray-200 text-gray-500 hover:bg-gray-50'
-                   }`}
-                 >
-                    <config.icon size={14} className="mr-1.5" />
-                    {config.label}
-                 </button>
-               ))}
-            </div>
+        const CATEGORIES = {
+          sightseeing: { label: '관광', icon: Camera, color: 'text-purple-600 bg-purple-50 border-purple-100' },
+          food: { label: '식당/카페', icon: Utensils, color: 'text-orange-600 bg-orange-50 border-orange-100' },
+          shopping: { label: '쇼핑', icon: ShoppingBag, color: 'text-pink-600 bg-pink-50 border-pink-100' },
+          accommodation: { label: '숙소', icon: Hotel, color: 'text-indigo-600 bg-indigo-50 border-indigo-100' },
+          transport: { label: '이동', icon: Plane, color: 'text-blue-600 bg-blue-50 border-blue-100' },
+          etc: { label: '기타', icon: MapPin, color: 'text-gray-600 bg-gray-50 border-gray-100' }
+        };
 
-            {/* Filtered List */}
-            <div className="space-y-3 min-h-[200px]">
-              {filteredChecklist.length === 0 ? (
-                <div className="text-center py-12 bg-white rounded-xl border border-dashed border-gray-200">
-                  <Filter size={32} className="mx-auto text-gray-300 mb-2" />
-                  <p className="text-gray-400 text-sm">
-                    {checklistFilter === 'all' 
-                      ? '아직 등록된 항목이 없습니다.' 
-                      : '해당 카테고리에 항목이 없습니다.'}
-                  </p>
-                </div>
-              ) : (
-                filteredChecklist.map(item => {
-                   const config = CHECKLIST_TYPES[item.category] || CHECKLIST_TYPES.etc;
-                   const textColor = config.color.split(' ')[1];
-                   const bgColor = config.color.split(' ')[0];
+        const CHECKLIST_TYPES = {
+          food: { label: '먹킷리스트', icon: Utensils, color: 'bg-orange-100 text-orange-600' },
+          shopping: { label: '쇼핑리스트', icon: ShoppingBag, color: 'bg-pink-100 text-pink-600' },
+          sightseeing: { label: '관광명소', icon: Camera, color: 'bg-purple-100 text-purple-600' },
+          etc: { label: '기타/준비물', icon: CheckSquare, color: 'bg-gray-100 text-gray-600' }
+        };
 
-                   return (
-                    <div 
-                      key={item.id}
-                      className={`bg-white p-4 rounded-xl border border-gray-100 shadow-sm flex items-center transition-all animate-fade-in ${item.isCompleted ? 'opacity-60 bg-gray-50' : 'hover:shadow-md'}`}
-                    >
-                      <button 
-                        onClick={() => handleToggleChecklistItem(item.id, item.isCompleted)}
-                        className={`mr-3 p-1 rounded-md transition-colors ${
-                          item.isCompleted ? 'text-teal-500 bg-teal-50' : 'text-gray-300 hover:text-teal-500'
-                        }`}
-                      >
-                        {item.isCompleted ? <CheckSquare size={24} /> : <Square size={24} />}
-                      </button>
-                      
-                      <div className="flex-1">
-                        <div className="flex items-center mb-1">
-                          <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold mr-2 ${config.color}`}>
-                            {config.label}
-                          </span>
-                        </div>
-                        <div className={`text-gray-800 font-medium ${item.isCompleted ? 'line-through text-gray-500' : ''}`}>
-                          {item.text}
-                        </div>
-                      </div>
-
-                      <button 
-                        onClick={() => requestDeleteChecklist(item.id)}
-                        className="ml-2 text-gray-300 hover:text-red-500 p-2"
-                      >
-                        <Trash2 size={16} />
-                      </button>
-                    </div>
-                   );
-                })
-              )}
-            </div>
+        // --- Components ---
+        const Navigation = ({ activeTab, setActiveTab }) => (
+          <div className="fixed bottom-0 left-0 w-full bg-white border-t border-gray-200 flex justify-around py-3 pb-6 z-50 shadow-lg text-xs font-medium">
+            <button onClick={() => setActiveTab('timeline')} className={`flex flex-col items-center space-y-1 ${activeTab === 'timeline' ? 'text-teal-600' : 'text-gray-400'}`}>
+              <Calendar size={22} /> <span>일정</span>
+            </button>
+            <button onClick={() => setActiveTab('checklist')} className={`flex flex-col items-center space-y-1 ${activeTab === 'checklist' ? 'text-teal-600' : 'text-gray-400'}`}>
+              <CheckSquare size={22} /> <span>체크리스트</span>
+            </button>
+            <button onClick={() => setActiveTab('translate')} className={`flex flex-col items-center space-y-1 ${activeTab === 'translate' ? 'text-teal-600' : 'text-gray-400'}`}>
+              <Languages size={22} /> <span>통역</span>
+            </button>
+            <button onClick={() => setActiveTab('currency')} className={`flex flex-col items-center space-y-1 ${activeTab === 'currency' ? 'text-teal-600' : 'text-gray-400'}`}>
+              <Coins size={22} /> <span>환율</span>
+            </button>
           </div>
-        )}
+        );
 
-        {/* 3. Translation View */}
-        {activeTab === 'translate' && (
-          <div className="space-y-6 animate-fade-in">
-            <div className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100">
-              <h2 className="text-lg font-bold mb-4 flex items-center text-gray-800">
-                <Languages size={20} className="mr-2 text-teal-600" />
-                필수 회화 카드
-              </h2>
-              <div className="grid grid-cols-1 gap-3">
-                {TRAVEL_PHRASES.map((phrase, idx) => (
-                  <div key={idx} className="p-3 border rounded-xl hover:bg-teal-50 transition-colors cursor-pointer group">
-                    <div className="flex justify-between items-start">
-                      <span className="font-bold text-gray-700">{phrase.ko}</span>
-                      <button 
-                        className="text-gray-400 group-hover:text-teal-600"
-                        onClick={() => navigator.clipboard.writeText(phrase.cn)} 
-                      >
-                        <Utensils size={14} className="opacity-0" /> 
-                      </button>
+        const TimelineItem = ({ item, onDelete }) => {
+          const categoryConfig = CATEGORIES[item.category] || CATEGORIES.etc;
+          const CategoryIcon = categoryConfig.icon;
+          return (
+            <div className="mb-6 ml-4 relative border-l-2 border-teal-200 pl-6 pb-2 last:border-l-0 last:mb-0 animate-fade-in">
+              <div className="absolute -left-[9px] top-0 w-4 h-4 rounded-full bg-teal-500 border-4 border-white shadow-sm"></div>
+              <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 hover:shadow-md transition-shadow">
+                <div className="flex justify-between items-start mb-2">
+                  <div className="flex items-center space-x-2">
+                    <div className="flex items-center text-teal-700 font-bold text-lg">
+                      <Clock size={16} className="mr-1" /> <span>{item.time}</span>
                     </div>
-                    <div className="flex items-baseline mt-1 space-x-2">
-                        <span className="text-lg text-teal-700 font-bold">{phrase.cn}</span>
-                        <span className="text-sm text-teal-500 font-medium">{phrase.pinyin}</span>
+                    <div className={`flex items-center px-2 py-1 rounded-md border text-xs font-bold ${categoryConfig.color}`}>
+                      <CategoryIcon size={12} className="mr-1" /> {categoryConfig.label}
                     </div>
-                    <div className="text-xs text-gray-400 mt-1 bg-gray-100 inline-block px-2 py-0.5 rounded-full">{phrase.pronunciation}</div>
+                  </div>
+                  <button onClick={() => onDelete(item.id)} className="text-gray-300 hover:text-red-500 transition-colors"><Trash2 size={16} /></button>
+                </div>
+                <h3 className="text-xl font-bold text-gray-800 mb-1">{item.title}</h3>
+                <div className="flex items-center text-gray-500 text-sm"><MapPin size={14} className="mr-1" />{item.location}</div>
+                {item.note && <div className="text-gray-600 text-sm mt-3 bg-gray-50 p-2 rounded">{item.note}</div>}
+              </div>
+            </div>
+          );
+        };
+
+        const ConfirmModal = ({ isOpen, onClose, onConfirm, message }) => {
+          if (!isOpen) return null;
+          return (
+            <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black bg-opacity-50 animate-fade-in">
+              <div className="bg-white rounded-2xl p-6 w-80 shadow-2xl">
+                <div className="flex items-center justify-center mb-4 text-red-500"><AlertTriangle size={40} /></div>
+                <h3 className="text-lg font-bold text-gray-800 text-center mb-2">삭제 하시겠습니까?</h3>
+                <p className="text-gray-600 text-sm text-center mb-6">{message}</p>
+                <div className="flex space-x-3">
+                  <button onClick={onClose} className="flex-1 py-3 bg-gray-100 text-gray-700 rounded-xl font-bold hover:bg-gray-200 transition-colors">취소</button>
+                  <button onClick={onConfirm} className="flex-1 py-3 bg-red-500 text-white rounded-xl font-bold hover:bg-red-600 transition-colors">삭제</button>
+                </div>
+              </div>
+            </div>
+          );
+        };
+
+        const AIChatModal = ({ isOpen, onClose }) => {
+          const initialMessage = { role: 'model', text: "안녕하세요! 연태-칭다오 여행 가이드입니다. 맛집, 교통, 일정 등 궁금한 점을 물어보세요! 🇨🇳" };
+          const [messages, setMessages] = useState([initialMessage]);
+          const [input, setInput] = useState('');
+          const [isLoading, setIsLoading] = useState(false);
+          const messagesEndRef = useRef(null);
+
+          const scrollToBottom = () => messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+          useEffect(() => { if (isOpen) scrollToBottom(); }, [messages, isOpen]);
+
+          const handleReset = () => setMessages([initialMessage]);
+          const handleSend = async () => {
+            if (!input.trim()) return;
+            const userMessage = { role: 'user', text: input };
+            setMessages(prev => [...prev, userMessage]);
+            setInput('');
+            setIsLoading(true);
+            try {
+              const prompt = `You are a friendly travel guide for Yantai and Qingdao. User: ${input}`;
+              // 실제 API 호출은 키가 없으면 실패합니다.
+              // const response = await fetch(API_URL, ...);
+              // Mock Response
+              setTimeout(() => {
+                  setMessages(prev => [...prev, { role: 'model', text: "API 키가 설정되지 않아 데모 응답을 보냅니다. (HTML 코드 내 apiKey 변수를 수정해주세요.)" }]);
+                  setIsLoading(false);
+              }, 1000);
+            } catch (error) {
+              setMessages(prev => [...prev, { role: 'model', text: "오류가 발생했습니다." }]);
+              setIsLoading(false);
+            }
+          };
+          
+          if (!isOpen) return null;
+          return (
+            <div className="fixed inset-0 z-[60] flex flex-col bg-white animate-slide-up">
+              <div className="bg-teal-600 text-white p-4 flex justify-between items-center shadow-md">
+                <div className="flex items-center"><Bot className="mr-2" size={24} /><div><h2 className="font-bold text-lg">AI 여행 가이드</h2><p className="text-xs text-teal-100">무엇이든 물어보세요</p></div></div>
+                <div className="flex items-center space-x-1">
+                  <button onClick={handleReset} className="p-2 hover:bg-teal-700 rounded-full"><RotateCcw size={20} /></button>
+                  <button onClick={onClose} className="p-2 hover:bg-teal-700 rounded-full"><X size={24} /></button>
+                </div>
+              </div>
+              <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50">
+                {messages.map((msg, idx) => (
+                  <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                    <div className={`max-w-[80%] p-3 rounded-2xl text-sm shadow-sm ${msg.role === 'user' ? 'bg-teal-600 text-white rounded-tr-none' : 'bg-white text-gray-800 border border-gray-200 rounded-tl-none'}`}>{msg.text}</div>
                   </div>
                 ))}
+                {isLoading && <div className="flex justify-start"><div className="bg-white p-3 rounded-2xl rounded-tl-none border border-gray-200 shadow-sm flex items-center space-x-2"><Loader2 size={16} className="animate-spin text-teal-600" /><span className="text-xs text-gray-500">작성 중...</span></div></div>}
+                <div ref={messagesEndRef} />
+              </div>
+              <div className="p-4 bg-white border-t border-gray-200 pb-8">
+                <div className="flex items-center space-x-2">
+                  <input type="text" value={input} onChange={(e) => setInput(e.target.value)} onKeyPress={(e) => e.key === 'Enter' && handleSend()} placeholder="예: 칭다오 맛집 추천해줘" className="flex-1 p-3 bg-gray-100 rounded-full focus:outline-none focus:ring-2 focus:ring-teal-500 text-sm" />
+                  <button onClick={handleSend} disabled={isLoading || !input.trim()} className="p-3 bg-teal-600 text-white rounded-full hover:bg-teal-700 disabled:bg-gray-300 transition-colors shadow-md"><Send size={20} /></button>
+                </div>
               </div>
             </div>
+          );
+        };
 
-            <div className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100">
-              <h2 className="text-lg font-bold mb-3 text-gray-800 flex items-center">
-                <Sparkles size={18} className="mr-2 text-purple-500" />
-                AI 실시간 통역 (병음 포함)
-              </h2>
-              <textarea 
-                className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl mb-3 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500"
-                rows="3"
-                placeholder="한국어를 입력하세요..."
-                value={transInput}
-                onChange={(e) => setTransInput(e.target.value)}
-              />
-              <button 
-                onClick={handleTranslate}
-                disabled={isTranslating}
-                className="w-full bg-gray-800 text-white py-2.5 rounded-xl font-bold text-sm mb-3 hover:bg-gray-900 disabled:bg-gray-400 flex justify-center items-center"
-              >
-                {isTranslating ? (
-                  <>
-                    <Loader2 size={18} className="mr-2 animate-spin" />
-                    번역 중...
-                  </>
-                ) : (
-                  "중국어로 번역하기"
-                )}
-              </button>
-              {transResult.cn && (
-                <div className="p-4 bg-teal-50 rounded-xl border border-teal-100">
-                  <div className="text-2xl text-teal-800 font-bold mb-1">{transResult.cn}</div>
-                  <div className="text-md text-teal-600 font-medium">{transResult.pinyin}</div>
+        const AddItemModal = ({ isOpen, onClose, onAdd, selectedDay }) => {
+          const [title, setTitle] = useState('');
+          const [time, setTime] = useState('');
+          const [location, setLocation] = useState('');
+          const [note, setNote] = useState('');
+          const [category, setCategory] = useState('sightseeing');
+          const [isSubmitting, setIsSubmitting] = useState(false);
+
+          if (!isOpen) return null;
+          const handleSubmit = async (e) => {
+            e.preventDefault();
+            if (!title || !time || isSubmitting) return;
+            setIsSubmitting(true);
+            await onAdd({ day: selectedDay, time, title, location, note, category });
+            setIsSubmitting(false);
+            setTitle(''); setTime(''); setLocation(''); setNote(''); setCategory('sightseeing');
+            onClose();
+          };
+
+          return (
+            <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black bg-opacity-50">
+              <div className="bg-white w-full sm:max-w-sm rounded-t-2xl sm:rounded-2xl shadow-2xl animate-slide-up flex flex-col max-h-[90vh]">
+                <div className="p-6 pb-2 flex justify-between items-center border-b border-gray-100">
+                  <h2 className="text-xl font-bold text-gray-800">{selectedDay}일차 일정 추가</h2>
+                  <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X size={24} /></button>
                 </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* 4. Currency View */}
-        {activeTab === 'currency' && (
-          <div className="space-y-6 animate-fade-in">
-             <div className="bg-gradient-to-br from-teal-500 to-teal-600 p-6 rounded-2xl shadow-lg text-white">
-               <div className="flex justify-between items-center mb-6">
-                 <h2 className="text-xl font-bold flex items-center">
-                   <Coins size={24} className="mr-2" />
-                   환율 계산기
-                 </h2>
-                 <div className="bg-teal-700 bg-opacity-50 px-3 py-1 rounded-full text-xs flex items-center">
-                    <RefreshCw size={12} className="mr-1" />
-                    1 CNY = {exchangeRate} KRW
-                 </div>
-               </div>
-
-               <div className="space-y-4">
-                 <div className="relative">
-                   <label className="text-teal-100 text-xs font-medium ml-1 block mb-1">중국 위안 (CNY)</label>
-                   <input 
-                      type="number" 
-                      value={cnyAmount}
-                      onChange={handleCnyChange}
-                      className="w-full p-4 pr-12 rounded-xl bg-white text-gray-800 text-2xl font-bold focus:outline-none shadow-inner"
-                      placeholder="0"
-                   />
-                   <span className="absolute right-4 top-9 text-gray-400 font-bold">¥</span>
-                 </div>
-
-                 <div className="flex justify-center">
-                    <div className="bg-white bg-opacity-20 p-1 rounded-full">
-                      <ChevronRight className="transform rotate-90 text-white" />
+                <div className="overflow-y-auto p-6 pt-4 pb-24">
+                  <form onSubmit={handleSubmit} className="space-y-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-600 mb-2">종류</label>
+                      <div className="grid grid-cols-3 gap-2">
+                        {Object.entries(CATEGORIES).map(([key, config]) => {
+                          const Icon = config.icon;
+                          return (
+                            <button key={key} type="button" onClick={() => setCategory(key)} className={`flex flex-col items-center justify-center p-2 rounded-xl border transition-all ${category === key ? 'bg-teal-50 border-teal-500 text-teal-700 ring-1 ring-teal-500' : 'bg-white border-gray-200 text-gray-500 hover:bg-gray-50'}`}>
+                              <Icon size={20} className="mb-1" /><span className="text-xs font-medium">{config.label}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
                     </div>
-                 </div>
-
-                 <div className="relative">
-                   <label className="text-teal-100 text-xs font-medium ml-1 block mb-1">한국 원 (KRW)</label>
-                   <input 
-                      type="number" 
-                      value={krwAmount}
-                      onChange={handleKrwChange}
-                      className="w-full p-4 pr-12 rounded-xl bg-white text-gray-800 text-2xl font-bold focus:outline-none shadow-inner"
-                      placeholder="0"
-                   />
-                   <span className="absolute right-4 top-9 text-gray-400 font-bold">₩</span>
-                 </div>
-               </div>
-             </div>
-
-             <div className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100">
-                <h3 className="font-bold text-gray-700 mb-3 text-sm">환율 설정</h3>
-                <div className="flex items-center space-x-2">
-                  <span className="text-sm text-gray-500">1 위안 =</span>
-                  <input 
-                    type="number" 
-                    value={exchangeRate}
-                    onChange={(e) => setExchangeRate(e.target.value)}
-                    className="w-24 p-2 border border-gray-200 rounded-lg text-center font-bold text-gray-700"
-                  />
-                  <span className="text-sm text-gray-500">원</span>
-                  <button className="ml-auto bg-gray-100 p-2 rounded-lg text-gray-500 hover:bg-gray-200">
-                    <Save size={16} />
-                  </button>
+                    <div><label className="block text-sm font-medium text-gray-600 mb-1">시간</label><input type="time" value={time} onChange={(e) => setTime(e.target.value)} className="w-full p-3 bg-gray-50 rounded-lg border border-gray-200" required /></div>
+                    <div><label className="block text-sm font-medium text-gray-600 mb-1">장소/활동명</label><input type="text" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="칭다오 맥주 박물관" className="w-full p-3 bg-gray-50 rounded-lg border border-gray-200" required /></div>
+                    <div><label className="block text-sm font-medium text-gray-600 mb-1">위치</label><input type="text" value={location} onChange={(e) => setLocation(e.target.value)} className="w-full p-3 bg-gray-50 rounded-lg border border-gray-200" /></div>
+                    <div><label className="block text-sm font-medium text-gray-600 mb-1">메모</label><textarea value={note} onChange={(e) => setNote(e.target.value)} className="w-full p-3 bg-gray-50 rounded-lg border border-gray-200 h-24 resize-none" /></div>
+                    <button type="submit" disabled={isSubmitting} className="w-full bg-teal-600 text-white py-3 rounded-xl font-bold hover:bg-teal-700 flex items-center justify-center disabled:bg-gray-400">{isSubmitting ? <Loader2 className="animate-spin mr-2" size={18}/> : <Plus size={18} className="mr-2" />} 일정 추가하기</button>
+                  </form>
                 </div>
-                <p className="text-xs text-gray-400 mt-2">
-                  * 실제 환전 시 수수료에 따라 차이가 있을 수 있습니다.
-                </p>
-             </div>
+              </div>
+            </div>
+          );
+        };
 
-             {/* Quick Calculation Cheat Sheet */}
-             <div className="grid grid-cols-3 gap-3">
-               {[10, 50, 100].map(val => (
-                 <div key={val} className="bg-white p-3 rounded-xl border border-gray-100 text-center shadow-sm">
-                   <div className="text-teal-600 font-bold text-lg">¥{val}</div>
-                   <div className="text-gray-400 text-xs">≈ ₩{(val * exchangeRate).toLocaleString()}</div>
-                 </div>
-               ))}
-             </div>
-          </div>
-        )}
+        // --- Main App ---
+        const TripPlannerApp = () => {
+          const [activeTab, setActiveTab] = useState('timeline');
+          const [activeDay, setActiveDay] = useState(1);
+          const [isModalOpen, setIsModalOpen] = useState(false);
+          const [isChatOpen, setIsChatOpen] = useState(false);
+          const [user, setUser] = useState(null);
+          const [deleteState, setDeleteState] = useState({ isOpen: false, type: null, id: null });
+          const [exchangeRate, setExchangeRate] = useState(DEFAULT_EXCHANGE_RATE);
+          const [cnyAmount, setCnyAmount] = useState('');
+          const [krwAmount, setKrwAmount] = useState('');
+          const [itinerary, setItinerary] = useState([]);
+          const [isLoadingData, setIsLoadingData] = useState(true);
+          const [checklistItems, setChecklistItems] = useState([]);
+          const [checklistInput, setChecklistInput] = useState('');
+          const [checklistCategory, setChecklistCategory] = useState('food');
+          const [checklistFilter, setChecklistFilter] = useState('all');
+          const [transInput, setTransInput] = useState('');
+          const [transResult, setTransResult] = useState({ cn: '', pinyin: '' });
+          const [isTranslating, setIsTranslating] = useState(false);
 
-      </div>
+          useEffect(() => {
+            signInAnonymously(auth).catch((error) => console.error("Auth Error", error));
+            const unsubscribe = onAuthStateChanged(auth, (currentUser) => setUser(currentUser));
+            return () => unsubscribe();
+          }, []);
 
-      {/* Modals */}
-      <AddItemModal 
-        isOpen={isModalOpen} 
-        onClose={() => setIsModalOpen(false)} 
-        onAdd={handleAddItem}
-        selectedDay={activeDay}
-      />
+          useEffect(() => {
+            if (!user) return;
+            // Firestore Listener (실패시 로컬 상태 처리를 위해 try-catch)
+            try {
+              const qItinerary = collection(db, 'artifacts', appId, 'public', 'data', 'itinerary');
+              const unsubItinerary = onSnapshot(qItinerary, (snapshot) => {
+                const loadedItems = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                setItinerary(loadedItems);
+                setIsLoadingData(false);
+              }, (err) => { 
+                  console.warn("Firestore sync failed (No keys):", err); 
+                  setIsLoadingData(false); // Stop loading spinner
+              });
 
-      <AIChatModal 
-        isOpen={isChatOpen}
-        onClose={() => setIsChatOpen(false)}
-      />
-      
-      {/* Delete Confirmation Modal */}
-      <ConfirmModal 
-        isOpen={deleteState.isOpen}
-        onClose={() => setDeleteState({ isOpen: false, type: null, id: null })}
-        onConfirm={executeDelete}
-        message={deleteState.type === 'itinerary' ? "이 일정을 정말 삭제하시겠습니까?" : "이 항목을 정말 삭제하시겠습니까?"}
-      />
+              const qChecklist = query(collection(db, 'artifacts', appId, 'public', 'data', 'checklist'), orderBy('createdAt', 'desc'));
+              const unsubChecklist = onSnapshot(qChecklist, (snapshot) => {
+                const items = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                setChecklistItems(items);
+              }, (err) => console.warn("Firestore sync failed (No keys)"));
+              
+              return () => { unsubItinerary(); unsubChecklist(); };
+            } catch (e) {
+                console.error("Firebase Setup Error", e);
+                setIsLoadingData(false);
+            }
+          }, [user]);
 
-      <Navigation activeTab={activeTab} setActiveTab={setActiveTab} />
+          // --- Handlers (Mocked if Firestore fails) ---
+          const handleAddItem = async (newItem) => {
+            const item = { ...newItem, category: newItem.category || 'etc', createdAt: new Date(), id: Date.now().toString() }; // Fallback ID
+            try {
+               if(user) await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'itinerary'), item);
+            } catch (e) {
+               setItinerary(prev => [...prev, item]); // Local fallback
+            }
+          };
 
-      <style>{`
-        .hide-scrollbar::-webkit-scrollbar {
-          display: none;
+          const requestDeleteItem = (id) => setDeleteState({ isOpen: true, type: 'itinerary', id });
+          
+          const handleAddChecklistItem = async (e) => {
+            e.preventDefault();
+            if (!checklistInput.trim()) return;
+            const newItem = { text: checklistInput, category: checklistCategory, isCompleted: false, createdAt: new Date(), id: Date.now().toString() };
+            try {
+              if(user) await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'checklist'), newItem);
+              else setChecklistItems(prev => [newItem, ...prev]);
+            } catch(e) { setChecklistItems(prev => [newItem, ...prev]); }
+            setChecklistInput('');
+          };
+
+          const handleToggleChecklistItem = async (id, currentStatus) => {
+             // Local UI Update first for speed
+             setChecklistItems(prev => prev.map(item => item.id === id ? {...item, isCompleted: !currentStatus} : item));
+             try {
+               if(user) await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'checklist', id), { isCompleted: !currentStatus });
+             } catch(e) {}
+          };
+
+          const requestDeleteChecklist = (id) => setDeleteState({ isOpen: true, type: 'checklist', id });
+
+          const executeDelete = async () => {
+            const { type, id } = deleteState;
+            if(type === 'itinerary') setItinerary(prev => prev.filter(i => i.id !== id));
+            else setChecklistItems(prev => prev.filter(i => i.id !== id));
+            
+            try {
+              if(user && id) {
+                const col = type === 'itinerary' ? 'itinerary' : 'checklist';
+                await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', col, id));
+              }
+            } catch(e) {}
+            setDeleteState({ isOpen: false, type: null, id: null });
+          };
+
+          const handleCnyChange = (e) => { const val = e.target.value; setCnyAmount(val); setKrwAmount((parseFloat(val || 0) * exchangeRate).toFixed(0)); };
+          const handleKrwChange = (e) => { const val = e.target.value; setKrwAmount(val); setCnyAmount((parseFloat(val || 0) / exchangeRate).toFixed(2)); };
+          
+          const handleTranslate = async () => {
+             if (!transInput) return;
+             setIsTranslating(true);
+             // Demo Mock
+             setTimeout(() => {
+                 setTransResult({ cn: "API 키 필요", pinyin: "Check Code" });
+                 setIsTranslating(false);
+             }, 1000);
+          };
+
+          const currentDayItems = useMemo(() => itinerary.filter(item => item.day === activeDay).sort((a, b) => a.time.localeCompare(b.time)), [itinerary, activeDay]);
+          const filteredChecklist = useMemo(() => checklistFilter === 'all' ? checklistItems : checklistItems.filter(item => (item.category || 'etc') === checklistFilter), [checklistItems, checklistFilter]);
+
+          return (
+            <div className="min-h-screen bg-gray-50 font-sans text-gray-800 pb-24">
+              <div className="bg-teal-600 text-white p-6 rounded-b-3xl shadow-lg relative overflow-hidden">
+                <div className="absolute top-0 right-0 opacity-10 transform translate-x-4 -translate-y-4"><Plane size={120} /></div>
+                <h1 className="text-2xl font-bold mb-1 flex items-center">연태-칭다오 여행 <span className="text-sm font-normal ml-2 bg-teal-700 px-2 py-1 rounded-full">5박 6일</span></h1>
+                <div className="flex justify-between items-end"><p className="text-teal-100 text-sm opacity-90">Yantai & Qingdao Trip Planner</p></div>
+              </div>
+
+              <div className="max-w-md mx-auto p-4">
+                {activeTab === 'timeline' && (
+                  <>
+                    <div className="flex overflow-x-auto pb-4 mb-2 hide-scrollbar space-x-3">
+                      {[1, 2, 3, 4, 5, 6].map(day => (
+                        <button key={day} onClick={() => setActiveDay(day)} className={`flex-shrink-0 w-16 h-20 rounded-2xl flex flex-col items-center justify-center transition-all duration-200 border ${activeDay === day ? 'bg-teal-600 text-white border-teal-600 shadow-md scale-105' : 'bg-white text-gray-400 border-gray-200 hover:border-teal-300'}`}>
+                          <span className="text-xs font-medium mb-1">DAY</span><span className="text-2xl font-bold">{day}</span>
+                        </button>
+                      ))}
+                    </div>
+                    <div className="space-y-2 relative">
+                      <div className="flex justify-between items-center mb-4 px-1">
+                        <h2 className="text-lg font-bold text-gray-700">{activeDay}일차 일정</h2>
+                        <button onClick={() => setIsModalOpen(true)} className="flex items-center text-teal-600 text-sm font-bold bg-teal-50 px-3 py-1.5 rounded-full hover:bg-teal-100 transition-colors"><Plus size={16} className="mr-1" />추가</button>
+                      </div>
+                      {isLoadingData ? <div className="text-center py-12"><Loader2 className="animate-spin mx-auto text-teal-600" size={32} /><p className="text-gray-400 mt-2 text-sm">일정 불러오는 중...</p></div> : 
+                       currentDayItems.length === 0 ? <div className="text-center py-12 bg-white rounded-xl border border-dashed border-gray-300"><p className="text-gray-400 mb-2">일정이 없습니다.</p></div> : 
+                       <div className="pl-2">{currentDayItems.map(item => <TimelineItem key={item.id} item={item} onDelete={requestDeleteItem} />)}</div>
+                      }
+                      <button onClick={() => setIsChatOpen(true)} className="fixed bottom-24 right-6 w-14 h-14 bg-indigo-600 text-white rounded-full shadow-xl flex items-center justify-center hover:bg-indigo-700 z-40 animate-bounce-slight"><MessageCircle size={28} /></button>
+                    </div>
+                  </>
+                )}
+
+                {activeTab === 'checklist' && (
+                   <div className="space-y-6 animate-fade-in">
+                     <div className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100">
+                       <h2 className="text-lg font-bold mb-4 text-gray-800 flex items-center"><CheckSquare size={20} className="mr-2 text-teal-600" />위시리스트 & 체크리스트</h2>
+                       <form onSubmit={handleAddChecklistItem} className="space-y-3">
+                         <div className="flex space-x-2 overflow-x-auto pb-2 hide-scrollbar">
+                           {Object.entries(CHECKLIST_TYPES).map(([key, config]) => (
+                             <button key={key} type="button" onClick={() => setChecklistCategory(key)} className={`flex-shrink-0 px-3 py-1.5 rounded-full text-xs font-bold flex items-center transition-colors ${checklistCategory === key ? 'bg-teal-600 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}>
+                               {checklistCategory === key && <Check size={12} className="mr-1" />}{config.label}
+                             </button>
+                           ))}
+                         </div>
+                         <div className="flex space-x-2"><input type="text" value={checklistInput} onChange={(e) => setChecklistInput(e.target.value)} placeholder="항목 입력" className="flex-1 p-3 bg-gray-50 border border-gray-200 rounded-xl text-sm" /><button type="submit" disabled={!checklistInput.trim()} className="bg-teal-600 text-white p-3 rounded-xl hover:bg-teal-700 disabled:bg-gray-300"><Plus size={20} /></button></div>
+                       </form>
+                     </div>
+                     <div className="flex space-x-2 overflow-x-auto pb-1 hide-scrollbar">
+                        <button onClick={() => setChecklistFilter('all')} className={`px-4 py-2 rounded-full text-sm font-bold transition-colors whitespace-nowrap ${checklistFilter === 'all' ? 'bg-gray-800 text-white shadow-md' : 'bg-white border border-gray-200 text-gray-500'}`}>전체 보기</button>
+                        {Object.entries(CHECKLIST_TYPES).map(([key, config]) => (
+                          <button key={key} onClick={() => setChecklistFilter(key)} className={`px-4 py-2 rounded-full text-sm font-bold transition-colors whitespace-nowrap flex items-center ${checklistFilter === key ? 'bg-teal-600 text-white shadow-md' : 'bg-white border border-gray-200 text-gray-500'}`}><config.icon size={14} className="mr-1.5" />{config.label}</button>
+                        ))}
+                     </div>
+                     <div className="space-y-3 min-h-[200px]">
+                        {filteredChecklist.length === 0 ? <div className="text-center py-12 bg-white rounded-xl border border-dashed border-gray-200"><Filter size={32} className="mx-auto text-gray-300 mb-2" /><p className="text-gray-400 text-sm">항목이 없습니다.</p></div> :
+                         filteredChecklist.map(item => {
+                           const config = CHECKLIST_TYPES[item.category] || CHECKLIST_TYPES.etc;
+                           return (
+                             <div key={item.id} className={`bg-white p-4 rounded-xl border border-gray-100 shadow-sm flex items-center transition-all animate-fade-in ${item.isCompleted ? 'opacity-60 bg-gray-50' : ''}`}>
+                               <button onClick={() => handleToggleChecklistItem(item.id, item.isCompleted)} className={`mr-3 p-1 rounded-md transition-colors ${item.isCompleted ? 'text-teal-500 bg-teal-50' : 'text-gray-300 hover:text-teal-500'}`}>{item.isCompleted ? <CheckSquare size={24} /> : <Square size={24} />}</button>
+                               <div className="flex-1"><div className="flex items-center mb-1"><span className={`text-[10px] px-2 py-0.5 rounded-full font-bold mr-2 ${config.color}`}>{config.label}</span></div><div className={`text-gray-800 font-medium ${item.isCompleted ? 'line-through text-gray-500' : ''}`}>{item.text}</div></div>
+                               <button onClick={() => requestDeleteChecklist(item.id)} className="ml-2 text-gray-300 hover:text-red-500 p-2"><Trash2 size={16} /></button>
+                             </div>
+                           );
+                         })
+                        }
+                     </div>
+                   </div>
+                )}
+
+                {activeTab === 'translate' && (
+                  <div className="space-y-6 animate-fade-in">
+                    <div className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100">
+                      <h2 className="text-lg font-bold mb-4 flex items-center text-gray-800"><Languages size={20} className="mr-2 text-teal-600" />필수 회화 카드</h2>
+                      <div className="grid grid-cols-1 gap-3">
+                        {TRAVEL_PHRASES.map((phrase, idx) => (
+                          <div key={idx} className="p-3 border rounded-xl hover:bg-teal-50 transition-colors cursor-pointer group">
+                            <div className="flex justify-between items-start"><span className="font-bold text-gray-700">{phrase.ko}</span><button onClick={() => navigator.clipboard.writeText(phrase.cn)}><Utensils size={14} className="opacity-0" /></button></div>
+                            <div className="flex items-baseline mt-1 space-x-2"><span className="text-lg text-teal-700 font-bold">{phrase.cn}</span><span className="text-sm text-teal-500 font-medium">{phrase.pinyin}</span></div>
+                            <div className="text-xs text-gray-400 mt-1 bg-gray-100 inline-block px-2 py-0.5 rounded-full">{phrase.pronunciation}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100">
+                      <h2 className="text-lg font-bold mb-3 text-gray-800 flex items-center"><Sparkles size={18} className="mr-2 text-purple-500" />AI 실시간 통역</h2>
+                      <textarea className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl mb-3 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500" rows="3" placeholder="한국어를 입력하세요..." value={transInput} onChange={(e) => setTransInput(e.target.value)} />
+                      <button onClick={handleTranslate} disabled={isTranslating} className="w-full bg-gray-800 text-white py-2.5 rounded-xl font-bold text-sm mb-3 hover:bg-gray-900 disabled:bg-gray-400 flex justify-center items-center">{isTranslating ? "번역 중..." : "중국어로 번역하기"}</button>
+                      {transResult.cn && <div className="p-4 bg-teal-50 rounded-xl border border-teal-100"><div className="text-2xl text-teal-800 font-bold mb-1">{transResult.cn}</div><div className="text-md text-teal-600 font-medium">{transResult.pinyin}</div></div>}
+                    </div>
+                  </div>
+                )}
+
+                {activeTab === 'currency' && (
+                  <div className="space-y-6 animate-fade-in">
+                    <div className="bg-gradient-to-br from-teal-500 to-teal-600 p-6 rounded-2xl shadow-lg text-white">
+                      <div className="flex justify-between items-center mb-6"><h2 className="text-xl font-bold flex items-center"><Coins size={24} className="mr-2" />환율 계산기</h2><div className="bg-teal-700 bg-opacity-50 px-3 py-1 rounded-full text-xs flex items-center"><RefreshCw size={12} className="mr-1" />1 CNY = {exchangeRate} KRW</div></div>
+                      <div className="space-y-4">
+                        <div className="relative"><label className="text-teal-100 text-xs font-medium ml-1 block mb-1">중국 위안 (CNY)</label><input type="number" value={cnyAmount} onChange={handleCnyChange} className="w-full p-4 pr-12 rounded-xl bg-white text-gray-800 text-2xl font-bold focus:outline-none shadow-inner" placeholder="0" /><span className="absolute right-4 top-9 text-gray-400 font-bold">¥</span></div>
+                        <div className="flex justify-center"><div className="bg-white bg-opacity-20 p-1 rounded-full"><ChevronRight className="transform rotate-90 text-white" /></div></div>
+                        <div className="relative"><label className="text-teal-100 text-xs font-medium ml-1 block mb-1">한국 원 (KRW)</label><input type="number" value={krwAmount} onChange={handleKrwChange} className="w-full p-4 pr-12 rounded-xl bg-white text-gray-800 text-2xl font-bold focus:outline-none shadow-inner" placeholder="0" /><span className="absolute right-4 top-9 text-gray-400 font-bold">₩</span></div>
+                      </div>
+                    </div>
+                    <div className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100">
+                       <h3 className="font-bold text-gray-700 mb-3 text-sm">환율 설정</h3>
+                       <div className="flex items-center space-x-2"><span className="text-sm text-gray-500">1 위안 =</span><input type="number" value={exchangeRate} onChange={(e) => setExchangeRate(e.target.value)} className="w-24 p-2 border border-gray-200 rounded-lg text-center font-bold text-gray-700" /><span className="text-sm text-gray-500">원</span><button className="ml-auto bg-gray-100 p-2 rounded-lg text-gray-500 hover:bg-gray-200"><Save size={16} /></button></div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <AddItemModal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} onAdd={handleAddItem} selectedDay={activeDay} />
+              <AIChatModal isOpen={isChatOpen} onClose={() => setIsChatOpen(false)} />
+              <ConfirmModal isOpen={deleteState.isOpen} onClose={() => setDeleteState({ isOpen: false, type: null, id: null })} onConfirm={executeDelete} message={deleteState.type === 'itinerary' ? "이 일정을 정말 삭제하시겠습니까?" : "이 항목을 정말 삭제하시겠습니까?"} />
+              <Navigation activeTab={activeTab} setActiveTab={setActiveTab} />
+            </div>
+          );
         }
-        .hide-scrollbar {
-          -ms-overflow-style: none;
-          scrollbar-width: none;
-        }
-        @keyframes slide-up {
-          from { transform: translateY(100%); opacity: 0; }
-          to { transform: translateY(0); opacity: 1; }
-        }
-        .animate-slide-up {
-          animation: slide-up 0.3s ease-out forwards;
-        }
-        @keyframes fade-in {
-          from { opacity: 0; }
-          to { opacity: 1; }
-        }
-        .animate-fade-in {
-          animation: fade-in 0.3s ease-out forwards;
-        }
-        @keyframes bounce-slight {
-          0%, 100% { transform: translateY(0); }
-          50% { transform: translateY(-5px); }
-        }
-        .animate-bounce-slight {
-          animation: bounce-slight 2s infinite ease-in-out;
-        }
-      `}</style>
-    </div>
-  );
-}
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<TripPlannerApp />);
+    </script>
+</body>
+</html>
