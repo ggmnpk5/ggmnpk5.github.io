@@ -5,17 +5,18 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>연태-칭다오 여행 플래너</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
-    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     
     <script type="importmap">
     {
       "imports": {
-        "lucide-react": "https://esm.sh/lucide-react@0.263.1?external=react",
-        "firebase/app": "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js",
-        "firebase/auth": "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js",
-        "firebase/firestore": "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js"
+        "react": "https://esm.sh/react@18.2.0",
+        "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+        "lucide-react": "https://esm.sh/lucide-react@0.263.1",
+        "firebase/app": "https://esm.sh/firebase@10.8.0/app",
+        "firebase/auth": "https://esm.sh/firebase@10.8.0/auth",
+        "firebase/firestore": "https://esm.sh/firebase@10.8.0/firestore"
       }
     }
     </script>
@@ -35,7 +36,9 @@
     <div id="root"></div>
 
     <script type="text/babel" data-type="module">
+        // 라이브러리 import (URL이 아닌 패키지 이름으로 호출)
         import React, { useState, useEffect, useMemo, useRef } from 'react';
+        import { createRoot } from 'react-dom/client';
         import { 
           Calendar, Clock, MapPin, Plus, Trash2, Languages, Coins, Sparkles, 
           ChevronRight, Plane, Utensils, Beer, Camera, Hotel, X, Save, 
@@ -47,26 +50,38 @@
         import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
         import { getFirestore, collection, addDoc, deleteDoc, updateDoc, doc, onSnapshot, serverTimestamp, orderBy, query } from 'firebase/firestore';
 
-        // --- 설정 영역 (자신의 키로 변경 필요) ---
-        // 주의: 실제 배포 시 API 키가 노출되지 않도록 주의하세요.
-        const apiKey = "YOUR_GEMINI_API_KEY"; 
-        const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${apiKey}`;
-
-        // Firebase 설정 (본인의 Firebase 콘솔에서 가져온 설정값으로 교체해야 작동합니다)
+        // --- [중요] API 키 설정 영역 ---
+        // 아래 따옴표("") 안에 본인의 키를 꼭 넣어야 기능이 정상 작동합니다.
+        // 키가 없어도 화면은 뜨지만, 채팅이나 저장은 안 됩니다.
+        const apiKey = ""; // Gemini API Key
+        
         const firebaseConfig = {
-            apiKey: "YOUR_FIREBASE_API_KEY",
-            authDomain: "YOUR_PROJECT.firebaseapp.com",
-            projectId: "YOUR_PROJECT_ID",
-            storageBucket: "YOUR_PROJECT.appspot.com",
-            messagingSenderId: "YOUR_SENDER_ID",
-            appId: "YOUR_APP_ID"
+            apiKey: "",          // Firebase API Key
+            authDomain: "",      // Firebase Auth Domain
+            projectId: "",       // Project ID
+            storageBucket: "",   // Storage Bucket
+            messagingSenderId: "", // Sender ID
+            appId: ""            // App ID
         };
 
-        // 앱 초기화
-        const app = initializeApp(firebaseConfig);
-        const auth = getAuth(app);
-        const db = getFirestore(app);
-        const appId = 'travel-app-demo'; // 임의의 ID
+        // --- 앱 초기화 (에러 방지 처리 포함) ---
+        let app, auth, db;
+        const appId = 'travel-app-demo';
+
+        try {
+            // 설정값이 비어있을 경우 더미 데이터로 실행되도록 처리
+            if (!firebaseConfig.apiKey) {
+                console.warn("Firebase 설정이 없습니다. 로컬 데모 모드로 실행됩니다.");
+            } else {
+                app = initializeApp(firebaseConfig);
+                auth = getAuth(app);
+                db = getFirestore(app);
+            }
+        } catch (e) {
+            console.error("Firebase 초기화 실패:", e);
+        }
+
+        const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${apiKey}`;
 
         // --- Mock Data & Helper Functions ---
         const DEFAULT_EXCHANGE_RATE = 192.5; 
@@ -176,15 +191,18 @@
             setIsLoading(true);
             try {
               const prompt = `You are a friendly travel guide for Yantai and Qingdao. User: ${input}`;
-              // 실제 API 호출은 키가 없으면 실패합니다.
-              // const response = await fetch(API_URL, ...);
-              // Mock Response
-              setTimeout(() => {
-                  setMessages(prev => [...prev, { role: 'model', text: "API 키가 설정되지 않아 데모 응답을 보냅니다. (HTML 코드 내 apiKey 변수를 수정해주세요.)" }]);
-                  setIsLoading(false);
-              }, 1000);
+              if(!apiKey) throw new Error("API Key Missing");
+
+              const response = await fetch(API_URL, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+              });
+              const data = await response.json();
+              const aiText = data.candidates?.[0]?.content?.parts?.[0]?.text || "죄송합니다. 답변을 불러올 수 없습니다.";
+              setMessages(prev => [...prev, { role: 'model', text: aiText }]);
             } catch (error) {
-              setMessages(prev => [...prev, { role: 'model', text: "오류가 발생했습니다." }]);
+              setMessages(prev => [...prev, { role: 'model', text: apiKey ? "네트워크 오류가 발생했습니다." : "API 키가 없습니다. 코드 내 apiKey 변수를 설정해주세요." }]);
+            } finally {
               setIsLoading(false);
             }
           };
@@ -293,14 +311,17 @@
           const [isTranslating, setIsTranslating] = useState(false);
 
           useEffect(() => {
-            signInAnonymously(auth).catch((error) => console.error("Auth Error", error));
-            const unsubscribe = onAuthStateChanged(auth, (currentUser) => setUser(currentUser));
-            return () => unsubscribe();
+            if(auth) {
+                signInAnonymously(auth).catch((error) => console.error("Auth Error", error));
+                const unsubscribe = onAuthStateChanged(auth, (currentUser) => setUser(currentUser));
+                return () => unsubscribe();
+            } else {
+                setIsLoadingData(false); // 인증 없음 -> 로딩 해제
+            }
           }, []);
 
           useEffect(() => {
-            if (!user) return;
-            // Firestore Listener (실패시 로컬 상태 처리를 위해 try-catch)
+            if (!user || !db) return;
             try {
               const qItinerary = collection(db, 'artifacts', appId, 'public', 'data', 'itinerary');
               const unsubItinerary = onSnapshot(qItinerary, (snapshot) => {
@@ -308,30 +329,31 @@
                 setItinerary(loadedItems);
                 setIsLoadingData(false);
               }, (err) => { 
-                  console.warn("Firestore sync failed (No keys):", err); 
-                  setIsLoadingData(false); // Stop loading spinner
+                  console.warn("Firestore sync failed:", err); 
+                  setIsLoadingData(false);
               });
 
               const qChecklist = query(collection(db, 'artifacts', appId, 'public', 'data', 'checklist'), orderBy('createdAt', 'desc'));
               const unsubChecklist = onSnapshot(qChecklist, (snapshot) => {
                 const items = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
                 setChecklistItems(items);
-              }, (err) => console.warn("Firestore sync failed (No keys)"));
+              }, (err) => console.warn("Checklist sync failed"));
               
               return () => { unsubItinerary(); unsubChecklist(); };
             } catch (e) {
-                console.error("Firebase Setup Error", e);
+                console.error("Firestore Error", e);
                 setIsLoadingData(false);
             }
           }, [user]);
 
-          // --- Handlers (Mocked if Firestore fails) ---
+          // --- Handlers ---
           const handleAddItem = async (newItem) => {
-            const item = { ...newItem, category: newItem.category || 'etc', createdAt: new Date(), id: Date.now().toString() }; // Fallback ID
+            const item = { ...newItem, category: newItem.category || 'etc', createdAt: new Date(), id: Date.now().toString() };
             try {
-               if(user) await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'itinerary'), item);
+               if(user && db) await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'itinerary'), item);
+               else setItinerary(prev => [...prev, item]); // 로컬 모드
             } catch (e) {
-               setItinerary(prev => [...prev, item]); // Local fallback
+               setItinerary(prev => [...prev, item]); 
             }
           };
 
@@ -342,17 +364,16 @@
             if (!checklistInput.trim()) return;
             const newItem = { text: checklistInput, category: checklistCategory, isCompleted: false, createdAt: new Date(), id: Date.now().toString() };
             try {
-              if(user) await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'checklist'), newItem);
+              if(user && db) await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'checklist'), newItem);
               else setChecklistItems(prev => [newItem, ...prev]);
             } catch(e) { setChecklistItems(prev => [newItem, ...prev]); }
             setChecklistInput('');
           };
 
           const handleToggleChecklistItem = async (id, currentStatus) => {
-             // Local UI Update first for speed
              setChecklistItems(prev => prev.map(item => item.id === id ? {...item, isCompleted: !currentStatus} : item));
              try {
-               if(user) await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'checklist', id), { isCompleted: !currentStatus });
+               if(user && db) await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'checklist', id), { isCompleted: !currentStatus });
              } catch(e) {}
           };
 
@@ -364,7 +385,7 @@
             else setChecklistItems(prev => prev.filter(i => i.id !== id));
             
             try {
-              if(user && id) {
+              if(user && db && id) {
                 const col = type === 'itinerary' ? 'itinerary' : 'checklist';
                 await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', col, id));
               }
@@ -378,11 +399,19 @@
           const handleTranslate = async () => {
              if (!transInput) return;
              setIsTranslating(true);
-             // Demo Mock
-             setTimeout(() => {
-                 setTransResult({ cn: "API 키 필요", pinyin: "Check Code" });
-                 setIsTranslating(false);
-             }, 1000);
+             try {
+                if(!apiKey) throw new Error("No API Key");
+                const prompt = `Translate to Chinese (Simplified) & Pinyin JSON: "${transInput}". Format: {"cn": "", "pinyin": ""}`;
+                const response = await fetch(API_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }) });
+                const data = await response.json();
+                const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+                const result = JSON.parse(text.replace(/```json/g, '').replace(/```/g, '').trim());
+                setTransResult(result);
+             } catch(e) {
+                setTransResult({ cn: "설정 확인 필요", pinyin: "API 키를 확인해주세요" });
+             } finally {
+                setIsTranslating(false);
+             }
           };
 
           const currentDayItems = useMemo(() => itinerary.filter(item => item.day === activeDay).sort((a, b) => a.time.localeCompare(b.time)), [itinerary, activeDay]);
@@ -507,7 +536,8 @@
           );
         }
 
-        const root = ReactDOM.createRoot(document.getElementById('root'));
+        // 렌더링 실행
+        const root = createRoot(document.getElementById('root'));
         root.render(<TripPlannerApp />);
     </script>
 </body>
